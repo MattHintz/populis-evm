@@ -17,12 +17,15 @@ interface IZkPassportVerifierAdapter {
     function verifyVaultAttestation(
         bytes calldata proof,
         VaultAttestation calldata attestation,
-        bytes32 bridgePolicyHash
+        bytes32 bridgePolicyHash,
+        string calldata expectedServiceSubscope
     ) external returns (bool);
 }
 
 contract PopulisZkPassportAttestationEmitter {
     uint16 public constant POLICY_VERSION = 1;
+    uint64 public constant MAX_PROOF_AGE_SECONDS = 7 days;
+    bytes16 private constant HEX_SYMBOLS = "0123456789abcdef";
 
     IZkPassportVerifierAdapter public immutable verifier;
     bytes32 public immutable bridgePolicyHash;
@@ -45,6 +48,7 @@ contract PopulisZkPassportAttestationEmitter {
     error ZeroAddress(string field);
     error ZeroBytes32(string field);
     error ZeroTimestamp();
+    error StaleProofTimestamp(uint64 proofTimestamp, uint256 currentTimestamp);
     error InvalidZkPassportProof();
 
     constructor(address verifier_, bytes32 bridgePolicyHash_) {
@@ -59,7 +63,12 @@ contract PopulisZkPassportAttestationEmitter {
         bytes calldata proof
     ) external {
         _validateAttestation(attestation);
-        bool ok = verifier.verifyVaultAttestation(proof, attestation, bridgePolicyHash);
+        bool ok = verifier.verifyVaultAttestation(
+            proof,
+            attestation,
+            bridgePolicyHash,
+            expectedVaultSubscope(attestation.vaultLauncherId)
+        );
         if (!ok) revert InvalidZkPassportProof();
 
         emit VaultAttestationVerified(
@@ -85,6 +94,26 @@ contract PopulisZkPassportAttestationEmitter {
         return _validatorMessageFields(attestation);
     }
 
+    function expectedVaultSubscope(bytes32 vaultLauncherId) public pure returns (string memory) {
+        if (vaultLauncherId == bytes32(0)) revert ZeroBytes32("vaultLauncherId");
+        bytes memory out = new bytes(72);
+        out[0] = "v";
+        out[1] = "a";
+        out[2] = "u";
+        out[3] = "l";
+        out[4] = "t";
+        out[5] = ":";
+        out[6] = "0";
+        out[7] = "x";
+        bytes memory launcher = abi.encodePacked(vaultLauncherId);
+        for (uint256 i = 0; i < 32; i++) {
+            uint8 value = uint8(launcher[i]);
+            out[8 + i * 2] = HEX_SYMBOLS[value >> 4];
+            out[9 + i * 2] = HEX_SYMBOLS[value & 0x0f];
+        }
+        return string(out);
+    }
+
     function _validatorMessageFields(
         IZkPassportVerifierAdapter.VaultAttestation calldata attestation
     ) private view returns (bytes32[] memory fields) {
@@ -104,12 +133,15 @@ contract PopulisZkPassportAttestationEmitter {
 
     function _validateAttestation(
         IZkPassportVerifierAdapter.VaultAttestation calldata attestation
-    ) private pure {
+    ) private view {
         if (attestation.vaultLauncherId == bytes32(0)) revert ZeroBytes32("vaultLauncherId");
         if (attestation.scopedNullifier == bytes32(0)) revert ZeroBytes32("scopedNullifier");
         if (attestation.serviceScopeHash == bytes32(0)) revert ZeroBytes32("serviceScopeHash");
         if (attestation.serviceSubscopeHash == bytes32(0)) revert ZeroBytes32("serviceSubscopeHash");
         if (attestation.proofTimestamp == 0) revert ZeroTimestamp();
+        if (block.timestamp > uint256(attestation.proofTimestamp) + MAX_PROOF_AGE_SECONDS) {
+            revert StaleProofTimestamp(attestation.proofTimestamp, block.timestamp);
+        }
         if (attestation.attestationLeafHash == bytes32(0)) revert ZeroBytes32("attestationLeafHash");
         if (attestation.attestationRoot == bytes32(0)) revert ZeroBytes32("attestationRoot");
         if (attestation.bridgeMessage == bytes32(0)) revert ZeroBytes32("bridgeMessage");

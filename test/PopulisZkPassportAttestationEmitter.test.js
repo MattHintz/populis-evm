@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
+const { time } = require('@nomicfoundation/hardhat-network-helpers');
 
 const BRIDGE_POLICY_HASH = '0x' + '55'.repeat(32);
 const PROOF = '0x123456';
@@ -21,6 +22,10 @@ function attestation(overrides = {}) {
     bridgeMessage: '0x8de348f6526b3bcc752ca1b524f3288c91ddbeb0f9d3451390ffbb0609565a71',
     ...overrides,
   };
+}
+
+function expectedSubscope(vaultLauncherId) {
+  return `vault:${vaultLauncherId.toLowerCase()}`;
 }
 
 describe('PopulisZkPassportAttestationEmitter', () => {
@@ -55,6 +60,7 @@ describe('PopulisZkPassportAttestationEmitter', () => {
 
     expect(await verifier.lastBridgePolicyHash()).to.equal(BRIDGE_POLICY_HASH);
     expect(await verifier.lastProof()).to.equal(PROOF);
+    expect(await verifier.lastExpectedServiceSubscope()).to.equal(expectedSubscope(a.vaultLauncherId));
   });
 
   it('does not emit when the verifier adapter rejects the proof', async () => {
@@ -62,6 +68,19 @@ describe('PopulisZkPassportAttestationEmitter', () => {
     await verifier.setResult(false);
     await expect(emitter.verifyAndEmit(attestation(), PROOF))
       .to.be.revertedWithCustomError(emitter, 'InvalidZkPassportProof');
+  });
+
+  it('rejects malformed vault binding when the verifier adapter reports wrong custom data', async () => {
+    const { verifier, emitter } = await deployFixture();
+    await verifier.setRequiredServiceSubscope(`vault:${b32('99')}`);
+    await expect(emitter.verifyAndEmit(attestation(), PROOF))
+      .to.be.revertedWithCustomError(emitter, 'InvalidZkPassportProof');
+  });
+
+  it('exposes the canonical vault subscope string for proof custom_data binding', async () => {
+    const { emitter } = await deployFixture();
+    const a = attestation();
+    expect(await emitter.expectedVaultSubscope(a.vaultLauncherId)).to.equal(expectedSubscope(a.vaultLauncherId));
   });
 
   it('rejects empty commitment fields before calling the verifier', async () => {
@@ -73,6 +92,18 @@ describe('PopulisZkPassportAttestationEmitter', () => {
       .withArgs('vaultLauncherId');
     const last = await verifier.lastBridgePolicyHash();
     expect(last).to.equal(ethers.ZeroHash);
+  });
+
+  it('rejects stale proof timestamps before calling the verifier', async () => {
+    const { verifier, emitter } = await deployFixture();
+    const maxProofAge = 7 * 24 * 60 * 60;
+    const currentTimestamp = await time.latest();
+    const a = attestation({ proofTimestamp: currentTimestamp - maxProofAge });
+    await time.setNextBlockTimestamp(currentTimestamp + 1);
+    await expect(emitter.verifyAndEmit(a, PROOF))
+      .to.be.revertedWithCustomError(emitter, 'StaleProofTimestamp')
+      .withArgs(a.proofTimestamp, currentTimestamp + 1);
+    expect(await verifier.lastBridgePolicyHash()).to.equal(ethers.ZeroHash);
   });
 
   it('exposes canonical fixed-width fields for validator signatures and portal polling', async () => {
