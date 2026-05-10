@@ -3,6 +3,8 @@ const { ethers } = require('hardhat');
 const { time } = require('@nomicfoundation/hardhat-network-helpers');
 
 const BRIDGE_POLICY_HASH = '0x' + '55'.repeat(32);
+const BRIDGE_PARENT_ID = '0x' + '66'.repeat(32);
+const BRIDGE_AMOUNT = 1;
 const PROOF = '0x123456';
 
 function b32(byteHex) {
@@ -10,6 +12,8 @@ function b32(byteHex) {
 }
 
 function attestation(overrides = {}) {
+  const bridgeParentId = overrides.bridgeParentId ?? BRIDGE_PARENT_ID;
+  const bridgeAmount = overrides.bridgeAmount ?? BRIDGE_AMOUNT;
   return {
     vaultLauncherId: b32('11'),
     scopedNullifier: b32('22'),
@@ -19,9 +23,25 @@ function attestation(overrides = {}) {
     proofTimestamp: 1_779_120_000,
     attestationLeafHash: '0x41950d187f655ae494bcdea426d643d3a21734ae9d3311c34477eb836867fcf7',
     attestationRoot: '0x41950d187f655ae494bcdea426d643d3a21734ae9d3311c34477eb836867fcf7',
+    bridgeParentId,
+    bridgeAmount,
+    bridgeCoinId: chiaCoinId(bridgeParentId, BRIDGE_POLICY_HASH, bridgeAmount),
     bridgeMessage: '0x8de348f6526b3bcc752ca1b524f3288c91ddbeb0f9d3451390ffbb0609565a71',
     ...overrides,
   };
+}
+
+function chiaCoinId(parentCoinInfo, puzzleHash, amount) {
+  return ethers.sha256(ethers.concat([parentCoinInfo, puzzleHash, clvmUint(amount)]));
+}
+
+function clvmUint(amount) {
+  if (!Number.isInteger(amount) || amount < 0) throw new Error('amount must be non-negative');
+  if (amount === 0) return '0x';
+  let hex = amount.toString(16);
+  if (hex.length % 2) hex = `0${hex}`;
+  if (parseInt(hex.slice(0, 2), 16) & 0x80) hex = `00${hex}`;
+  return `0x${hex}`;
 }
 
 function expectedSubscope(vaultLauncherId) {
@@ -53,6 +73,9 @@ describe('PopulisZkPassportAttestationEmitter', () => {
         a.proofTimestamp,
         a.attestationLeafHash,
         a.attestationRoot,
+        a.bridgeParentId,
+        a.bridgeAmount,
+        a.bridgeCoinId,
         a.bridgeMessage,
         BRIDGE_POLICY_HASH,
         1,
@@ -106,6 +129,15 @@ describe('PopulisZkPassportAttestationEmitter', () => {
     expect(await verifier.lastBridgePolicyHash()).to.equal(ethers.ZeroHash);
   });
 
+  it('rejects bridge coin ids that do not match the attested parent, policy, and amount', async () => {
+    const { verifier, emitter } = await deployFixture();
+    const a = attestation({ bridgeCoinId: b32('99') });
+    await expect(emitter.verifyAndEmit(a, PROOF))
+      .to.be.revertedWithCustomError(emitter, 'InvalidBridgeCoinId')
+      .withArgs(chiaCoinId(a.bridgeParentId, BRIDGE_POLICY_HASH, a.bridgeAmount), a.bridgeCoinId);
+    expect(await verifier.lastBridgePolicyHash()).to.equal(ethers.ZeroHash);
+  });
+
   it('exposes canonical fixed-width fields for validator signatures and portal polling', async () => {
     const { emitter } = await deployFixture();
     const a = attestation();
@@ -115,6 +147,7 @@ describe('PopulisZkPassportAttestationEmitter', () => {
       a.vaultLauncherId,
       a.attestationRoot,
       BRIDGE_POLICY_HASH,
+      a.bridgeCoinId,
       a.bridgeMessage,
       a.attestationLeafHash,
       a.scopedNullifier,

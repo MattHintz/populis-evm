@@ -11,6 +11,9 @@ interface IZkPassportVerifierAdapter {
         uint64 proofTimestamp;
         bytes32 attestationLeafHash;
         bytes32 attestationRoot;
+        bytes32 bridgeParentId;
+        uint64 bridgeAmount;
+        bytes32 bridgeCoinId;
         bytes32 bridgeMessage;
     }
 
@@ -40,6 +43,9 @@ contract PopulisZkPassportAttestationEmitter {
         uint64 proofTimestamp,
         bytes32 attestationLeafHash,
         bytes32 attestationRoot,
+        bytes32 bridgeParentId,
+        uint64 bridgeAmount,
+        bytes32 bridgeCoinId,
         bytes32 bridgeMessage,
         bytes32 bridgePolicyHash,
         uint16 policyVersion
@@ -47,9 +53,11 @@ contract PopulisZkPassportAttestationEmitter {
 
     error ZeroAddress(string field);
     error ZeroBytes32(string field);
+    error ZeroAmount(string field);
     error ZeroTimestamp();
     error StaleProofTimestamp(uint64 proofTimestamp, uint256 currentTimestamp);
     error InvalidZkPassportProof();
+    error InvalidBridgeCoinId(bytes32 expected, bytes32 actual);
 
     constructor(address verifier_, bytes32 bridgePolicyHash_) {
         if (verifier_ == address(0)) revert ZeroAddress("verifier");
@@ -81,6 +89,9 @@ contract PopulisZkPassportAttestationEmitter {
             attestation.proofTimestamp,
             attestation.attestationLeafHash,
             attestation.attestationRoot,
+            attestation.bridgeParentId,
+            attestation.bridgeAmount,
+            attestation.bridgeCoinId,
             attestation.bridgeMessage,
             bridgePolicyHash,
             POLICY_VERSION
@@ -117,18 +128,19 @@ contract PopulisZkPassportAttestationEmitter {
     function _validatorMessageFields(
         IZkPassportVerifierAdapter.VaultAttestation calldata attestation
     ) private view returns (bytes32[] memory fields) {
-        fields = new bytes32[](11);
+        fields = new bytes32[](12);
         fields[0] = bytes32(uint256(POLICY_VERSION));
         fields[1] = attestation.vaultLauncherId;
         fields[2] = attestation.attestationRoot;
         fields[3] = bridgePolicyHash;
-        fields[4] = attestation.bridgeMessage;
-        fields[5] = attestation.attestationLeafHash;
-        fields[6] = attestation.scopedNullifier;
-        fields[7] = bytes32(uint256(attestation.nullifierType));
-        fields[8] = attestation.serviceScopeHash;
-        fields[9] = attestation.serviceSubscopeHash;
-        fields[10] = bytes32(uint256(attestation.proofTimestamp));
+        fields[4] = attestation.bridgeCoinId;
+        fields[5] = attestation.bridgeMessage;
+        fields[6] = attestation.attestationLeafHash;
+        fields[7] = attestation.scopedNullifier;
+        fields[8] = bytes32(uint256(attestation.nullifierType));
+        fields[9] = attestation.serviceScopeHash;
+        fields[10] = attestation.serviceSubscopeHash;
+        fields[11] = bytes32(uint256(attestation.proofTimestamp));
     }
 
     function _validateAttestation(
@@ -144,6 +156,38 @@ contract PopulisZkPassportAttestationEmitter {
         }
         if (attestation.attestationLeafHash == bytes32(0)) revert ZeroBytes32("attestationLeafHash");
         if (attestation.attestationRoot == bytes32(0)) revert ZeroBytes32("attestationRoot");
+        if (attestation.bridgeParentId == bytes32(0)) revert ZeroBytes32("bridgeParentId");
+        if (attestation.bridgeAmount == 0) revert ZeroAmount("bridgeAmount");
+        if (attestation.bridgeCoinId == bytes32(0)) revert ZeroBytes32("bridgeCoinId");
+        bytes32 expectedBridgeCoinId = _chiaCoinId(
+            attestation.bridgeParentId,
+            bridgePolicyHash,
+            attestation.bridgeAmount
+        );
+        if (attestation.bridgeCoinId != expectedBridgeCoinId) {
+            revert InvalidBridgeCoinId(expectedBridgeCoinId, attestation.bridgeCoinId);
+        }
         if (attestation.bridgeMessage == bytes32(0)) revert ZeroBytes32("bridgeMessage");
+    }
+
+    function _chiaCoinId(bytes32 parentCoinInfo, bytes32 puzzleHash, uint64 amount) private pure returns (bytes32) {
+        return sha256(abi.encodePacked(parentCoinInfo, puzzleHash, _clvmUint64(amount)));
+    }
+
+    function _clvmUint64(uint64 value) private pure returns (bytes memory) {
+        if (value == 0) return new bytes(0);
+        uint64 remaining = value;
+        uint256 length = 0;
+        while (remaining != 0) {
+            length++;
+            remaining >>= 8;
+        }
+        bool needsLeadingZero = ((value >> ((length - 1) * 8)) & 0x80) != 0;
+        bytes memory out = new bytes(length + (needsLeadingZero ? 1 : 0));
+        uint256 offset = needsLeadingZero ? 1 : 0;
+        for (uint256 i = 0; i < length; i++) {
+            out[offset + length - 1 - i] = bytes1(uint8(value >> (i * 8)));
+        }
+        return out;
     }
 }
