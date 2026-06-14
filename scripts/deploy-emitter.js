@@ -5,14 +5,21 @@
  *   # Local (Hardhat node — uses MockZkPassportVerifierAdapter):
  *   npx hardhat run scripts/deploy-emitter.js --network hardhat
  *
- *   # Base Sepolia — requires .env with BASE_SEPOLIA_RPC_URL + DEPLOYER_PRIVATE_KEY:
- *   npx hardhat run scripts/deploy-emitter.js --network baseSepolia
+ *   # Base Sepolia with real ZkPassportRealVerifierAdapter (alpha testnet):
+ *   ZKPASSPORT_DOMAIN=populis.app ZKPASSPORT_DEV_MODE=true \
+ *     npx hardhat run scripts/deploy-emitter.js --network baseSepolia
  *
- * Environment variables (add to .env):
+ *   # Base Sepolia with a pre-deployed adapter at a known address:
+ *   ZKPASSPORT_VERIFIER_ADDR=0x... \
+ *     npx hardhat run scripts/deploy-emitter.js --network baseSepolia
+ *
+ * Environment variables (add to populis_evm/.env):
  *   BASE_SEPOLIA_RPC_URL      — Base Sepolia JSON-RPC endpoint
  *   DEPLOYER_PRIVATE_KEY      — 0x-prefixed deployer private key
- *   ZKPASSPORT_VERIFIER_ADDR  — (optional) real verifier adapter address;
- *                               if omitted, deploys MockZkPassportVerifierAdapter
+ *   ZKPASSPORT_DOMAIN         — domain passed to ZkPassportRealVerifierAdapter
+ *                               (e.g. "populis.app"); triggers real adapter deploy
+ *   ZKPASSPORT_DEV_MODE       — "true" to accept mock ZKR passports (alpha testnet)
+ *   ZKPASSPORT_VERIFIER_ADDR  — (optional) skip adapter deploy, use this address
  *   BRIDGE_POLICY_HASH        — (optional) 0x-prefixed 32-byte bridge policy hash;
  *                               if omitted, uses the pinned testnet11 value below
  *
@@ -21,6 +28,9 @@
  *
  * Validator BLS pubkey (48 bytes, hex):
  *   a8f9b0c1f992c49210fc726fc610885b966f84747126753659c6c3f8ae5bf3baf5b6e1a399fc8a749daf45dd74efac4c
+ *
+ * zkPassport root verifier (deterministic address, all supported chains):
+ *   0x1D000001000EFD9a6371f4d90bB8920D5431c0D8
  */
 
 'use strict';
@@ -40,9 +50,21 @@ async function main() {
   console.log(`Bridge policy: ${bridgePolicyHash}`);
 
   let verifierAddress = process.env.ZKPASSPORT_VERIFIER_ADDR;
+  const zkpDomain = process.env.ZKPASSPORT_DOMAIN;
+  const zkpDevMode = process.env.ZKPASSPORT_DEV_MODE === 'true';
 
-  if (!verifierAddress) {
-    console.log('\nNo ZKPASSPORT_VERIFIER_ADDR set — deploying MockZkPassportVerifierAdapter…');
+  if (!verifierAddress && zkpDomain) {
+    console.log(`\nZKPASSPORT_DOMAIN=${zkpDomain}, devMode=${zkpDevMode} — deploying ZkPassportRealVerifierAdapter…`);
+    const RealAdapterFactory = await ethers.getContractFactory('ZkPassportRealVerifierAdapter');
+    const realAdapter = await RealAdapterFactory.deploy(zkpDomain, zkpDevMode);
+    await realAdapter.waitForDeployment();
+    verifierAddress = await realAdapter.getAddress();
+    console.log(`ZkPassportRealVerifierAdapter : ${verifierAddress}`);
+    console.log(`  domain   : ${await realAdapter.domain()}`);
+    console.log(`  devMode  : ${await realAdapter.devMode()}`);
+    console.log(`  rootVerifier: 0x1D000001000EFD9a6371f4d90bB8920D5431c0D8 (hardcoded)`);
+  } else if (!verifierAddress) {
+    console.log('\nNo ZKPASSPORT_VERIFIER_ADDR or ZKPASSPORT_DOMAIN set — deploying MockZkPassportVerifierAdapter…');
     const MockFactory = await ethers.getContractFactory('MockZkPassportVerifierAdapter');
     const mock = await MockFactory.deploy();
     await mock.waitForDeployment();
