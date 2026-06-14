@@ -60,8 +60,8 @@ async function main() {
     await realAdapter.waitForDeployment();
     verifierAddress = await realAdapter.getAddress();
     console.log(`ZkPassportRealVerifierAdapter : ${verifierAddress}`);
-    console.log(`  domain   : ${await realAdapter.domain()}`);
-    console.log(`  devMode  : ${await realAdapter.devMode()}`);
+    console.log(`  domain   : ${zkpDomain} (constructor arg)`);
+    console.log(`  devMode  : ${zkpDevMode} (constructor arg)`);
     console.log(`  rootVerifier: 0x1D000001000EFD9a6371f4d90bB8920D5431c0D8 (hardcoded)`);
   } else if (!verifierAddress) {
     console.log('\nNo ZKPASSPORT_VERIFIER_ADDR or ZKPASSPORT_DOMAIN set — deploying MockZkPassportVerifierAdapter…');
@@ -87,8 +87,8 @@ async function main() {
   console.log(`  Address        : ${emitterAddress}`);
   console.log(`  Tx hash        : ${receipt.hash}`);
   console.log(`  Block          : ${receipt.blockNumber}`);
-  console.log(`  Bridge policy  : ${await emitter.bridgePolicyHash()}`);
-  console.log(`  Verifier       : ${await emitter.verifier()}`);
+  console.log(`  Bridge policy  : ${bridgePolicyHash} (constructor arg)`);
+  console.log(`  Verifier       : ${verifierAddress} (constructor arg)`);
 
   console.log('\n── Add to portal environment.ts ──────────────────────────────────────────');
   console.log(`zkPassport: {`);
